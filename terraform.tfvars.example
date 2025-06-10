@@ -1,0 +1,9 @@
+# AWS Configuration
+aws_region = "us-east-1"
+
+# Lambda Configuration
+lambda_function_name = "ec2-scheduler"
+
+# Example: You can override these variables
+# aws_region = "eu-west-1"
+# lambda_function_name = "my-custom-ec2-scheduler"
