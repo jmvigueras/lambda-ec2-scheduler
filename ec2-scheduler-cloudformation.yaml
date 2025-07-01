@@ -1,0 +1,307 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'EC2 Scheduler Lambda Function - Automatically start and stop EC2 instances based on a weekly schedule'
+
+Parameters:
+  FunctionName:
+    Type: String
+    Default: 'ec2-scheduler'
+    Description: 'Name of the Lambda function'
+
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+    Description: 'CloudWatch Logs retention period in days'
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1827, 3653]
+
+Resources:
+  # IAM Role for Lambda Function
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${FunctionName}-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: !Sub '${FunctionName}-policy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*'
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeInstances
+                  - ec2:StartInstances
+                  - ec2:StopInstances
+                  - ec2:DescribeInstanceStatus
+                Resource: '*'
+
+  # CloudWatch Log Group
+  LambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${FunctionName}'
+      RetentionInDays: !Ref LogRetentionDays
+
+  # Lambda Function
+  EC2SchedulerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Ref FunctionName
+      Runtime: python3.9
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 60
+      Environment:
+        Variables:
+          LOG_LEVEL: 'INFO'
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          from datetime import datetime, timezone
+          import logging
+
+          # Configure logging
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          # Initialize EC2 client
+          ec2 = boto3.client('ec2')
+
+          # Weekly schedule configuration
+          WEEKLY_SCHEDULE = {
+              'monday': {'start': '09:00', 'stop': '18:00'},
+              'tuesday': {'start': '09:00', 'stop': '18:00'},
+              'wednesday': {'start': '09:00', 'stop': '18:00'},
+              'thursday': {'start': '09:00', 'stop': '18:00'},
+              'friday': {'start': '09:00', 'stop': '18:00'},
+              'saturday': None,
+              'sunday': None
+          }
+
+          # Instance configuration
+          INSTANCE_CONFIG = {
+              'tags': {
+                  'AutoSchedule': 'true',
+              }
+          }
+
+          def lambda_handler(event, context):
+              try:
+                  action = event.get('action', None)
+                  if action is None or action == '':
+                      action = determine_action_from_schedule()
+                  
+                  if not action:
+                      logger.info("No action needed based on current schedule")
+                      return {'statusCode': 200, 'body': json.dumps('No action needed')}
+                  
+                  instances = get_managed_instances()
+                  
+                  if not instances:
+                      logger.info("No instances found matching the criteria")
+                      return {'statusCode': 200, 'body': json.dumps('No instances found')}
+                  
+                  if action == 'start':
+                      result = start_instances(instances)
+                  elif action == 'stop':
+                      result = stop_instances(instances)
+                  else:
+                      raise ValueError(f"Invalid action: {action}")
+                  
+                  logger.info(f"Action '{action}' completed successfully for {len(instances)} instances")
+                  
+                  return {
+                      'statusCode': 200,
+                      'body': json.dumps({
+                          'action': action,
+                          'instances_affected': len(instances),
+                          'instance_ids': instances,
+                          'result': result
+                      })
+                  }
+                  
+              except Exception as e:
+                  logger.error(f"Error in lambda_handler: {str(e)}")
+                  return {'statusCode': 500, 'body': json.dumps(f'Error: {str(e)}')}
+
+          def determine_action_from_schedule():
+              def is_between(start, end, current):
+                  return start <= current < end
+
+              now = datetime.now(timezone.utc)
+              current_day = now.strftime('%A').lower()
+              current_time = now.strftime('%H:%M')
+
+              logger.info(f"Current day: {current_day}, Current time: {current_time}")
+
+              day_schedule = WEEKLY_SCHEDULE.get(current_day)
+              if not day_schedule:
+                  return None
+
+              start_time = day_schedule.get('start') if day_schedule else None
+              stop_time = day_schedule.get('stop') if day_schedule else None
+
+              if start_time and stop_time:
+                  if is_between(start_time, stop_time, current_time):
+                      return 'start'
+                  return 'stop'
+              return None
+
+          def get_managed_instances():
+              instances = []
+              try:
+                  filters = []
+                  for key, value in INSTANCE_CONFIG['tags'].items():
+                      filters.append({'Name': f'tag:{key}', 'Values': [value]})
+                  
+                  filters.append({
+                      'Name': 'instance-state-name',
+                      'Values': ['running', 'stopped', 'stopping', 'pending']
+                  })
+                  
+                  response = ec2.describe_instances(Filters=filters)
+                  
+                  for reservation in response['Reservations']:
+                      for instance in reservation['Instances']:
+                          instances.append(instance['InstanceId'])
+                  
+                  logger.info(f"Found {len(instances)} instances matching tag criteria")
+                  return instances
+                  
+              except Exception as e:
+                  logger.error(f"Error getting managed instances: {str(e)}")
+                  raise
+
+          def start_instances(instance_ids):
+              try:
+                  if not instance_ids:
+                      return "No instances to start"
+                  
+                  response = ec2.describe_instances(InstanceIds=instance_ids)
+                  instances_to_start = []
+                  
+                  for reservation in response['Reservations']:
+                      for instance in reservation['Instances']:
+                          state = instance['State']['Name']
+                          instance_id = instance['InstanceId']
+                          
+                          if state == 'stopped':
+                              instances_to_start.append(instance_id)
+                              logger.info(f"Instance {instance_id} is stopped, will start")
+                          else:
+                              logger.info(f"Instance {instance_id} is in state '{state}', skipping")
+                  
+                  if instances_to_start:
+                      result = ec2.start_instances(InstanceIds=instances_to_start)
+                      logger.info(f"Started instances: {instances_to_start}")
+                      return result
+                  else:
+                      return "No instances needed to be started"
+                      
+              except Exception as e:
+                  logger.error(f"Error starting instances: {str(e)}")
+                  raise
+
+          def stop_instances(instance_ids):
+              try:
+                  if not instance_ids:
+                      return "No instances to stop"
+                  
+                  response = ec2.describe_instances(InstanceIds=instance_ids)
+                  instances_to_stop = []
+                  
+                  for reservation in response['Reservations']:
+                      for instance in reservation['Instances']:
+                          state = instance['State']['Name']
+                          instance_id = instance['InstanceId']
+                          
+                          if state == 'running':
+                              instances_to_stop.append(instance_id)
+                              logger.info(f"Instance {instance_id} is running, will stop")
+                          else:
+                              logger.info(f"Instance {instance_id} is in state '{state}', skipping")
+                  
+                  if instances_to_stop:
+                      result = ec2.stop_instances(InstanceIds=instances_to_stop)
+                      logger.info(f"Stopped instances: {instances_to_stop}")
+                      return result
+                  else:
+                      return "No instances needed to be stopped"
+                      
+              except Exception as e:
+                  logger.error(f"Error stopping instances: {str(e)}")
+                  raise
+    DependsOn:
+      - LambdaLogGroup
+
+  # EventBridge Rules for scheduling
+  StartInstancesRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${FunctionName}-start-weekday'
+      Description: 'Start EC2 instances on weekdays at 9:00 AM UTC'
+      ScheduleExpression: 'cron(0 9 ? * MON-FRI *)'
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt EC2SchedulerFunction.Arn
+          Id: StartInstances
+          Input: '{"action": "start"}'
+
+  StopInstancesRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${FunctionName}-stop-weekday'
+      Description: 'Stop EC2 instances on weekdays at 6:00 PM UTC'
+      ScheduleExpression: 'cron(0 18 ? * MON-FRI *)'
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt EC2SchedulerFunction.Arn
+          Id: StopInstances
+          Input: '{"action": "stop"}'
+
+  # Lambda Permissions
+  LambdaPermissionForStartRule:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref EC2SchedulerFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt StartInstancesRule.Arn
+
+  LambdaPermissionForStopRule:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref EC2SchedulerFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt StopInstancesRule.Arn
+
+Outputs:
+  LambdaFunctionName:
+    Description: 'Name of the Lambda function'
+    Value: !Ref EC2SchedulerFunction
+
+  LambdaFunctionArn:
+    Description: 'ARN of the Lambda function'
+    Value: !GetAtt EC2SchedulerFunction.Arn
+
+  CloudWatchLogGroup:
+    Description: 'CloudWatch Log Group for Lambda function'
+    Value: !Ref LambdaLogGroup
+
+  IAMRoleArn:
+    Description: 'ARN of the IAM role used by the Lambda function'
+    Value: !GetAtt LambdaExecutionRole.Arn

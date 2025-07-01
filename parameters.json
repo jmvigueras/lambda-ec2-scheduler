@@ -1,0 +1,10 @@
+[
+  {
+    "ParameterKey": "FunctionName",
+    "ParameterValue": "ec2-scheduler"
+  },
+  {
+    "ParameterKey": "LogRetentionDays",
+    "ParameterValue": "14"
+  }
+]
