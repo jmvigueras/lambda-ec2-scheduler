@@ -5,6 +5,7 @@
 .terraform/
 .terraform.lock.hcl
 terraform.tfplan
+deployment*/
 
 # Lambda deployment package
 lambda_function.zip

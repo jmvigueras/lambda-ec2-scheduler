@@ -14,12 +14,12 @@ ec2 = boto3.client('ec2')
 # Format: 'day': {'start': 'HH:MM', 'stop': 'HH:MM'}
 # Days: monday, tuesday, wednesday, thursday, friday, saturday, sunday
 WEEKLY_SCHEDULE = {
-    'monday': {'start': '08:00', 'stop': '18:00'},
-    'tuesday': {'start': '08:00', 'stop': '18:00'},
-    'wednesday': {'start': '08:00', 'stop': '18:00'},
-    'thursday': {'start': '08:00', 'stop': '18:00'},
-    'friday': {'start': '08:00', 'stop': '18:00'},
-    'saturday': {'start': '10:00', 'stop': '16:00'},
+    'monday': {'start': '09:00', 'stop': '18:00'},
+    'tuesday': {'start': '09:00', 'stop': '18:00'},
+    'wednesday': {'start': '09:00', 'stop': '18:00'},
+    'thursday': {'start': '09:00', 'stop': '18:00'},
+    'friday': {'start': '09:00', 'stop': '18:00'},
+    'saturday': None, # No operations on Sunday
     'sunday': None  # No operations on Sunday
 }
 
@@ -46,8 +46,8 @@ def lambda_handler(event, context):
     
     try:
         # Get action from event
-        action = event.get('action')
-        if not action:
+        action = event.get('action', None)
+        if action is None or action == '':
             action = determine_action_from_schedule()
         
         if not action:
@@ -96,28 +96,34 @@ def lambda_handler(event, context):
 
 def determine_action_from_schedule():
     """
-    Determine what action to take based on current time and weekly schedule
+    Determine what action to take based on current time and weekly schedule.
+    Returns 'start', 'stop', or None.
     """
+    def is_between(start, end, current):
+        return start <= current < end
+
     now = datetime.now(timezone.utc)
     current_day = now.strftime('%A').lower()
     current_time = now.strftime('%H:%M')
-    
+
     logger.info(f"Current day: {current_day}, Current time: {current_time}")
-    
-    if current_day not in WEEKLY_SCHEDULE or WEEKLY_SCHEDULE[current_day] is None:
+
+    day_schedule = WEEKLY_SCHEDULE.get(current_day)
+    if not day_schedule:
         return None
-    
-    day_schedule = WEEKLY_SCHEDULE[current_day]
-    start_time = day_schedule.get('start')
-    stop_time = day_schedule.get('stop')
-    
-    # This is a simplified logic - in practice, you'd trigger this function
-    # at specific times via CloudWatch Events
-    if current_time == start_time:
-        return 'start'
-    elif current_time == stop_time:
+
+    start_time = day_schedule.get('start') if day_schedule else None
+    stop_time = day_schedule.get('stop') if day_schedule else None
+
+    if start_time and stop_time:
+        if is_between(start_time, stop_time, current_time):
+            return 'start'
         return 'stop'
-    
+    if start_time:
+        return 'start' if current_time >= start_time else 'stop'
+    if stop_time:
+        return 'stop' if current_time < stop_time else 'start'
+
     return None
 
 def get_managed_instances():

@@ -34,7 +34,8 @@ if ! aws sts get-caller-identity &> /dev/null; then
 fi
 
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-REGION=$(aws configure get region || echo "us-east-1")
+#REGION=$(aws configure get region || echo "us-east-1")
+REGION="eu-west-1"
 echo -e "${GREEN}✅ AWS credentials valid. Account: ${ACCOUNT_ID}, Region: ${REGION}${NC}"
 
 # Function to prompt for confirmation
@@ -50,7 +51,7 @@ echo "📋 Current Configuration:"
 echo "========================"
 echo "AWS Region: ${REGION}"
 echo "Lambda Function: ec2-scheduler"
-echo "Schedule: Mon-Fri 8:00-18:00, Sat 10:00-16:00 (UTC)"
+echo "Schedule: Mon-Fri 8:00-18:00, Sat 10:00-20:00 (UTC)"
 echo ""
 
 # Ask if user wants to continue

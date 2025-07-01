@@ -126,14 +126,7 @@ resource "aws_cloudwatch_event_rule" "start_instances_weekday" {
   name        = "${var.lambda_function_name}-start-weekday"
   description = "Start EC2 instances on weekdays at 8:00 AM UTC"
   
-  schedule_expression = "cron(0 8 ? * MON-FRI *)"
-}
-
-resource "aws_cloudwatch_event_rule" "start_instances_saturday" {
-  name        = "${var.lambda_function_name}-start-saturday"
-  description = "Start EC2 instances on Saturday at 10:00 AM UTC"
-  
-  schedule_expression = "cron(0 10 ? * SAT *)"
+  schedule_expression = "cron(0 9 ? * MON-FRI *)"
 }
 
 # EventBridge rules for stopping instances (Monday-Friday at 6:00 PM, Saturday at 4:00 PM)
@@ -144,27 +137,11 @@ resource "aws_cloudwatch_event_rule" "stop_instances_weekday" {
   schedule_expression = "cron(0 18 ? * MON-FRI *)"
 }
 
-resource "aws_cloudwatch_event_rule" "stop_instances_saturday" {
-  name        = "${var.lambda_function_name}-stop-saturday"
-  description = "Stop EC2 instances on Saturday at 4:00 PM UTC"
-  
-  schedule_expression = "cron(0 16 ? * SAT *)"
-}
 
 # EventBridge targets for starting instances
 resource "aws_cloudwatch_event_target" "start_lambda_weekday" {
   rule      = aws_cloudwatch_event_rule.start_instances_weekday.name
   target_id = "StartInstancesWeekday"
-  arn       = aws_lambda_function.ec2_scheduler.arn
-
-  input = jsonencode({
-    action = "start"
-  })
-}
-
-resource "aws_cloudwatch_event_target" "start_lambda_saturday" {
-  rule      = aws_cloudwatch_event_rule.start_instances_saturday.name
-  target_id = "StartInstancesSaturday"
   arn       = aws_lambda_function.ec2_scheduler.arn
 
   input = jsonencode({
@@ -183,16 +160,6 @@ resource "aws_cloudwatch_event_target" "stop_lambda_weekday" {
   })
 }
 
-resource "aws_cloudwatch_event_target" "stop_lambda_saturday" {
-  rule      = aws_cloudwatch_event_rule.stop_instances_saturday.name
-  target_id = "StopInstancesSaturday"
-  arn       = aws_lambda_function.ec2_scheduler.arn
-
-  input = jsonencode({
-    action = "stop"
-  })
-}
-
 # Lambda permissions for EventBridge
 resource "aws_lambda_permission" "allow_eventbridge_start_weekday" {
   statement_id  = "AllowExecutionFromEventBridgeStartWeekday"
@@ -202,28 +169,12 @@ resource "aws_lambda_permission" "allow_eventbridge_start_weekday" {
   source_arn    = aws_cloudwatch_event_rule.start_instances_weekday.arn
 }
 
-resource "aws_lambda_permission" "allow_eventbridge_start_saturday" {
-  statement_id  = "AllowExecutionFromEventBridgeStartSaturday"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.ec2_scheduler.function_name
-  principal     = "events.amazonaws.com"
-  source_arn    = aws_cloudwatch_event_rule.start_instances_saturday.arn
-}
-
 resource "aws_lambda_permission" "allow_eventbridge_stop_weekday" {
   statement_id  = "AllowExecutionFromEventBridgeStopWeekday"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.ec2_scheduler.function_name
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.stop_instances_weekday.arn
-}
-
-resource "aws_lambda_permission" "allow_eventbridge_stop_saturday" {
-  statement_id  = "AllowExecutionFromEventBridgeStopSaturday"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.ec2_scheduler.function_name
-  principal     = "events.amazonaws.com"
-  source_arn    = aws_cloudwatch_event_rule.stop_instances_saturday.arn
 }
 
 # Outputs
